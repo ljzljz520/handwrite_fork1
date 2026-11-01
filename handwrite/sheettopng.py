@@ -152,10 +152,20 @@ class SHEETtoPNG:
         # Structure (single sheet): UserProvidedDir/ord(character)/ord(character).png
         # Structure (multiple sheets): UserProvidedDir/sheet_filename/ord(character)/ord(character).png
         for k, images in enumerate(characters):
-            character = os.path.join(characters_dir, str(ALL_CHARS[k]))
-            if not os.path.exists(character):
-                os.mkdir(character)
-            cv2.imwrite(
-                os.path.join(character, str(ALL_CHARS[k]) + ".png"),
-                images[0],
-            )
+            self.save_character_image(images[0], characters_dir, ALL_CHARS[k])
+
+    def save_character_image(self, image, characters_dir, codepoint):
+        """Save a single character crop as ``characters_dir/codepoint/codepoint.png``.
+
+        Parameters
+        ----------
+        image : numpy.ndarray
+            Cropped character image (as returned by ``detect_characters``).
+        characters_dir : str
+            Path to directory to save characters in.
+        codepoint : int
+            Unicode codepoint of the character.
+        """
+        character = os.path.join(characters_dir, str(codepoint))
+        os.makedirs(character, exist_ok=True)
+        cv2.imwrite(os.path.join(character, str(codepoint) + ".png"), image)

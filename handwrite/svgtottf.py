@@ -3,9 +3,15 @@ import os
 import json
 import uuid
 
+# Options for the fontforge subprocess. Only used by resume builds so that a
+# regenerated font replaces the previous output atomically.
+TTF_OPTIONS_ENV = "HANDWRITE_TTF_OPTIONS"
+
 
 class SVGtoTTF:
-    def convert(self, directory, outdir, config, metadata=None):
+    def convert(
+        self, directory, outdir, config, metadata=None, overwrite=False, token=None
+    ):
         """Convert a directory with SVG images to TrueType Font.
 
         Calls a subprocess to the run this script with Fontforge Python
@@ -21,9 +27,19 @@ class SVGtoTTF:
             Path to config file.
         metadata : dict
             Dictionary containing the metadata (filename, family or style)
+        overwrite : bool, default=False
+            When True, generate to a temporary file and atomically replace a
+            same-named previous font instead of creating `` (1).ttf`` copies.
+        token : str, optional
+            Unique token used to name the temporary file in overwrite mode.
         """
         import subprocess
         import platform
+
+        env = dict(os.environ)
+        env[TTF_OPTIONS_ENV] = json.dumps(
+            {"overwrite": bool(overwrite), "token": token or ""}
+        )
 
         subprocess.run(
             (
@@ -37,7 +53,8 @@ class SVGtoTTF:
                 directory,
                 outdir,
                 json.dumps(metadata),
-            ]
+            ],
+            env=env,
         )
 
     def set_properties(self):
@@ -147,7 +164,9 @@ class SVGtoTTF:
             offsets = [0 if x is None else x for x in flatten_list(kerning_table)]
             self.font.addKerningClass("kern", "kern-1", rows, cols, offsets)
 
-    def generate_font_file(self, filename, outdir, config_file):
+    def generate_font_file(
+        self, filename, outdir, config_file, overwrite=False, token=None
+    ):
         """Output TTF file.
 
         Additionally checks for multiple outputs and duplicates.
@@ -160,6 +179,13 @@ class SVGtoTTF:
             Path to output directory.
         config_file : str
             Path to config file.
+        overwrite : bool, default=False
+            When True, write to a temporary file and atomically replace the
+            same-named previous output, so an interrupted generation can not
+            leave a partial font behind that later runs might mistake for a
+            current result.
+        token : str, optional
+            Unique token used to name the temporary file in overwrite mode.
         """
         if filename is None:
             raise NameError("filename not found in config file.")
@@ -170,17 +196,38 @@ class SVGtoTTF:
             + (filename + ".ttf" if not filename.endswith(".ttf") else filename)
         )
 
+        if overwrite:
+            # Hidden sibling file that still carries a .ttf suffix, so
+            # fontforge can detect the output format from the extension.
+            base = os.path.basename(outfile)
+            if base.endswith(".ttf"):
+                base = base[:-4]
+            tmpfile = str(
+                outdir + os.sep + "." + base + "." + (token or "tmp") + ".ttf"
+            )
+            sys.stderr.write("\nGenerating %s...\n" % outfile)
+            self.font.generate(tmpfile)
+            if not os.path.exists(tmpfile) or os.path.getsize(tmpfile) == 0:
+                raise RuntimeError(
+                    "Font generation failed; {} was not produced.".format(tmpfile)
+                )
+            os.replace(tmpfile, outfile)
+            return outfile
+
         while os.path.exists(outfile):
             outfile = os.path.splitext(outfile)[0] + " (1).ttf"
 
         sys.stderr.write("\nGenerating %s...\n" % outfile)
         self.font.generate(outfile)
+        return outfile
 
     def convert_main(self, config_file, directory, outdir, metadata):
         try:
             self.font = fontforge.font()
         except:
             import fontforge
+
+        options = json.loads(os.environ.get(TTF_OPTIONS_ENV, "{}"))
 
         with open(config_file) as f:
             self.config = json.load(f)
@@ -201,7 +248,13 @@ class SVGtoTTF:
         filename = self.metadata.get("filename", None) or self.config["props"].get(
             "filename", None
         )
-        self.generate_font_file(str(filename), outdir, config_file)
+        self.generate_font_file(
+            str(filename),
+            outdir,
+            config_file,
+            overwrite=options.get("overwrite", False),
+            token=options.get("token"),
+        )
 
 
 if __name__ == "__main__":
